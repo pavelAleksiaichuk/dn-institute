@@ -49,15 +49,29 @@ evt_008,0x4444444444444444444444444444444444444444444444444444444444444444,10:07
 		"evt_008": "clock skew detected",
 	}
 
+	foundDLQIDs := make(map[string]int)
 	for _, item := range result.DLQEvents {
 		if item.Event == nil {
-			continue
+			t.Fatalf("DLQ item has nil Event context")
 		}
 		eventID := item.Event.EventID
-		if prefix, exists := expectedDLQReasons[eventID]; exists {
-			if !strings.Contains(item.Reason, prefix) {
-				t.Errorf("for event %s expected reason containing '%s', got '%s'", eventID, prefix, item.Reason)
-			}
+		foundDLQIDs[eventID]++
+
+		prefix, exists := expectedDLQReasons[eventID]
+		if !exists {
+			t.Errorf("unexpected DLQ event ID: %s", eventID)
+			continue
+		}
+		if !strings.Contains(item.Reason, prefix) {
+			t.Errorf("for event %s expected reason containing '%s', got '%s'", eventID, prefix, item.Reason)
+		}
+	}
+
+	for id := range expectedDLQReasons {
+		if foundDLQIDs[id] == 0 {
+			t.Errorf("expected DLQ event ID %s not found", id)
+		} else if foundDLQIDs[id] > 1 {
+			t.Errorf("duplicate entry for DLQ event ID %s found (%d times)", id, foundDLQIDs[id])
 		}
 	}
 }
