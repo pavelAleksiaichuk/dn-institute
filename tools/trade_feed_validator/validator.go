@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/csv"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -14,19 +17,20 @@ import (
 const TimeFormat = "15:04:05"
 
 type TradeEvent struct {
-	EventID          string    `json:"event_id"`
-	TxHash           string    `json:"tx_hash"`
-	BlockTime        string    `json:"block_time"`
-	Wallet           string    `json:"wallet"`
-	Side             string    `json:"side"`
-	Amount           float64   `json:"amount"`
-	IngestedAt       string    `json:"ingested_at"`
-	ParsedBlockTime  time.Time `json:"-"`
-	ParsedIngestTime time.Time `json:"-"`
+	EventID          string      `json:"event_id"`
+	TxHash           string      `json:"tx_hash"`
+	BlockTime        string      `json:"block_time"`
+	Wallet           string      `json:"wallet"`
+	Side             string      `json:"side"`
+	Amount           json.Number `json:"amount"`
+	IngestedAt       string      `json:"ingested_at"`
+	ParsedBlockTime  time.Time   `json:"-"`
+	ParsedIngestTime time.Time   `json:"-"`
 }
 
 type DLQItem struct {
-	RawRecord []string    `json:"raw_record"`
+	RawInput  string      `json:"raw_input,omitempty"`
+	RawRecord []string    `json:"raw_record,omitempty"`
 	Event     *TradeEvent `json:"event,omitempty"`
 	Reason    string      `json:"reason"`
 }
@@ -37,51 +41,97 @@ type ValidationResult struct {
 }
 
 func ValidateFeed(r io.Reader) (*ValidationResult, error) {
-	reader := csv.NewReader(r)
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("read feed: %w", err)
+	}
+
+	lines := bytes.Split(data, []byte{'\n'})
+
+	reader := csv.NewReader(bytes.NewReader(data))
+	reader.FieldsPerRecord = -1
 
 	header, err := reader.Read()
 	if err != nil {
 		return nil, err
 	}
 
-	expectedHeader := []string{"event_id", "tx_hash", "block_time", "wallet", "side", "amount", "ingested_at"}
+	expectedHeader := []string{
+		"event_id",
+		"tx_hash",
+		"block_time",
+		"wallet",
+		"side",
+		"amount",
+		"ingested_at",
+	}
+
 	if len(header) != len(expectedHeader) {
-		return nil, fmt.Errorf("invalid header length: expected %d, got %d", len(expectedHeader), len(header))
+		return nil, fmt.Errorf(
+			"invalid header length: expected %d, got %d",
+			len(expectedHeader),
+			len(header),
+		)
 	}
 
 	for i, h := range header {
 		cleanHeader := strings.TrimSpace(strings.ToLower(h))
 		if cleanHeader != expectedHeader[i] {
-			return nil, fmt.Errorf("invalid header at index %d: expected %s, got %s", i, expectedHeader[i], cleanHeader)
+			return nil, fmt.Errorf(
+				"invalid header at index %d: expected %s, got %s",
+				i,
+				expectedHeader[i],
+				cleanHeader,
+			)
 		}
 	}
 
 	result := &ValidationResult{}
 	seenTxHash := make(map[string]string)
-	lineNum := 1
 
 	for {
 		record, err := reader.Read()
+
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
-			if parseErr, ok := err.(*csv.ParseError); ok {
+
+			if errors.Is(err, csv.ErrFieldCount) {
 				result.DLQEvents = append(result.DLQEvents, DLQItem{
-					RawRecord: nil,
-					Reason:    fmt.Sprintf("malformed csv row (line %d): %v", lineNum, parseErr),
+					RawRecord: record,
+					Reason: fmt.Sprintf(
+						"malformed csv row: expected %d columns, got %d",
+						len(expectedHeader),
+						len(record),
+					),
 				})
-				lineNum++
 				continue
 			}
+
+			if parseErr, ok := err.(*csv.ParseError); ok {
+				result.DLQEvents = append(result.DLQEvents, DLQItem{
+					RawInput: rawInputForParseError(lines, parseErr),
+					Reason: fmt.Sprintf(
+						"malformed csv row (line %d): %v",
+						parseErr.Line,
+						parseErr.Err,
+					),
+				})
+				continue
+			}
+
 			return nil, err
 		}
-		lineNum++
 
-		if len(record) < 7 {
+		if len(record) != len(expectedHeader) {
 			result.DLQEvents = append(result.DLQEvents, DLQItem{
 				RawRecord: record,
-				Reason:    "malformed row: insufficient columns",
+				Reason: fmt.Sprintf(
+					"malformed row: expected %d columns, got %d",
+					len(expectedHeader),
+					len(record),
+				),
 			})
 			continue
 		}
@@ -103,7 +153,13 @@ func ValidateFeed(r io.Reader) (*ValidationResult, error) {
 			IngestedAt: ingestedAtStr,
 		}
 
-		if eventID == "" || txHash == "" || blockTimeStr == "" || wallet == "" || side == "" || ingestedAtStr == "" {
+		if eventID == "" ||
+			txHash == "" ||
+			blockTimeStr == "" ||
+			wallet == "" ||
+			side == "" ||
+			ingestedAtStr == "" {
+
 			result.DLQEvents = append(result.DLQEvents, DLQItem{
 				RawRecord: record,
 				Event:     tempEvent,
@@ -113,15 +169,21 @@ func ValidateFeed(r io.Reader) (*ValidationResult, error) {
 		}
 
 		amount, err := strconv.ParseFloat(amountStr, 64)
-		if err != nil || amount <= 0 || math.IsNaN(amount) || math.IsInf(amount, 0) {
+		if err != nil ||
+			amount <= 0 ||
+			math.IsNaN(amount) ||
+			math.IsInf(amount, 0) ||
+			!json.Valid([]byte(amountStr)) {
+
 			result.DLQEvents = append(result.DLQEvents, DLQItem{
 				RawRecord: record,
 				Event:     tempEvent,
-				Reason:    "invalid amount format, non-positive value, or non-finite number",
+				Reason:    "invalid amount format, non-positive value, or non-JSON numeric syntax",
 			})
 			continue
 		}
-		tempEvent.Amount = amount
+
+		tempEvent.Amount = json.Number(amountStr)
 
 		upperSide := strings.ToUpper(side)
 		if upperSide != "BUY" && upperSide != "SELL" {
@@ -132,6 +194,7 @@ func ValidateFeed(r io.Reader) (*ValidationResult, error) {
 			})
 			continue
 		}
+
 		tempEvent.Side = upperSide
 
 		parsedBlockTime, err := time.Parse(TimeFormat, blockTimeStr)
@@ -161,7 +224,7 @@ func ValidateFeed(r io.Reader) (*ValidationResult, error) {
 			result.DLQEvents = append(result.DLQEvents, DLQItem{
 				RawRecord: record,
 				Event:     tempEvent,
-				Reason:    "clock skew detected: ingested_at is before block_time",
+				Reason:    "temporal consistency violation: ingested_at is before block_time",
 			})
 			continue
 		}
@@ -177,7 +240,10 @@ func ValidateFeed(r io.Reader) (*ValidationResult, error) {
 			result.DLQEvents = append(result.DLQEvents, DLQItem{
 				RawRecord: record,
 				Event:     tempEvent,
-				Reason:    fmt.Sprintf("duplicate transaction hash (already seen in event %s)", prevEventID),
+				Reason: fmt.Sprintf(
+					"duplicate transaction hash (already seen in event %s)",
+					prevEventID,
+				),
 			})
 			continue
 		}
@@ -187,4 +253,21 @@ func ValidateFeed(r io.Reader) (*ValidationResult, error) {
 	}
 
 	return result, nil
+}
+
+func rawInputForParseError(lines [][]byte, parseErr *csv.ParseError) string {
+	start := parseErr.StartLine - 1
+	end := parseErr.Line
+
+	if start < 0 {
+		start = 0
+	}
+	if end > len(lines) {
+		end = len(lines)
+	}
+	if start >= end {
+		return ""
+	}
+
+	return string(bytes.Join(lines[start:end], []byte{'\n'}))
 }
