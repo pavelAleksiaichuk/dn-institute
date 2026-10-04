@@ -35,5 +35,5 @@ To scale these checks and prevent data quality issues globally across the pipeli
    ```
 3. Run the validator:
    ```bash
-   go run main.go sample_feed.csv
+   go run . sample_feed.csv
    ```
