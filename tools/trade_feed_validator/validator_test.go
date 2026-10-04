@@ -1,0 +1,31 @@
+package main
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestValidateFeed(t *testing.T) {
+	csvData := `event_id,tx_hash,block_time,wallet,side,amount,ingested_at
+evt_001,0xaa1,09:14:02,0xD4...,BUY,120000,09:14:05
+evt_002,0xaa2,09:41:20,0xD4...,BUY,120000,09:41:23
+evt_003,0xaa2,09:41:20,0xD4...,BUY,120000,09:44:01
+evt_004,0xaa3,09:52:10,0xE5...,SELL,45000,09:52:14
+evt_005,0xaa4,,0xE5...,SELL,30000,09:58:30
+evt_006,0xaa5,10:03:11,0xF6...,BUY,90000,10:03:15
+evt_007,0xaa5,10:03:11,0xF6...,BUY,90000,10:03:15
+evt_008,0xaa6,10:10:00,0xF6...,SELL,90000,09:59:50`
+
+	res, err := ValidateFeed(strings.NewReader(csvData))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(res.ValidEvents) != 4 {
+		t.Errorf("expected 4 valid events, got %d", len(res.ValidEvents))
+	}
+
+	if len(res.DLQEvents) != 4 {
+		t.Errorf("expected 4 DLQ events, got %d", len(res.DLQEvents))
+	}
+}
