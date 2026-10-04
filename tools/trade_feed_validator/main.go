@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"trade_feed_validator"
 )
 
 func main() {
@@ -19,7 +18,7 @@ func main() {
 	}
 	defer file.Close()
 
-	result, err := trade_feed_validator.ValidateFeed(file)
+	result, err := ValidateFeed(file)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Validation error: %v\n", err)
 		os.Exit(1)

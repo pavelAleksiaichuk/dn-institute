@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"math"
 )
 
 type TradeEvent struct {
@@ -69,7 +70,15 @@ func ValidateFeed(r io.Reader) (*ValidationResult, error) {
 			lineNum++
 			if parseErr, ok := err.(*csv.ParseError); ok && parseErr.Err == csv.ErrFieldCount {
 				result.DLQEvents = append(result.DLQEvents, DLQItem{
-					Event:  TradeEvent{},
+					Event: TradeEvent{
+						EventID:    safeGet(record, 0),
+						TxHash:     safeGet(record, 1),
+						BlockTime:  safeGet(record, 2),
+						Wallet:     safeGet(record, 3),
+						Side:       safeGet(record, 4),
+						Amount:     safeGet(record, 5),
+						IngestedAt: safeGet(record, 6),
+					},
 					Reason: fmt.Sprintf("malformed row: field count mismatch at line %d", lineNum),
 				})
 				continue
@@ -122,10 +131,10 @@ func ValidateFeed(r io.Reader) (*ValidationResult, error) {
 		}
 
 		amountVal, err := strconv.ParseFloat(event.Amount, 64)
-		if err != nil || amountVal <= 0 {
+		if err != nil || amountVal <= 0 || math.IsNaN(amountVal) || math.IsInf(amountVal, 0) {
 			result.DLQEvents = append(result.DLQEvents, DLQItem{
 				Event:  event,
-				Reason: fmt.Sprintf("invalid amount: %s", event.Amount),
+				Reason: fmt.Sprintf("invalid or non-finite amount: %s", event.Amount),
 			})
 			continue
 		}
