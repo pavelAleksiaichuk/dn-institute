@@ -12,7 +12,7 @@ A lightweight, robust Go-based validator designed to inspect trade event feeds f
 2. **Missing Critical Field (`evt_005`)**
    - **Affected Rows:** `evt_005` (`block_time` is `null`).
    - **Downstream Impact:** Breaks chronological sorting, window functions, and distorts VWAP (Volume Weighted Average Price) calculations because price/time alignment is lost.
-   - **Handling Strategy for `evt_005`:** Sent directly to a **Dead-Letter Queue (DLQ)** with a `missing mandatory block_time` reason tag. We drop it from the primary analytics ingestion table to protect data integrity. *What would change this?* If the source indexer supported historical state recovery or event replays via RPC, we would trigger an asynchronous backfill query instead of permanent dropping.
+   - **Handling Strategy for `evt_005`:** Sent directly to a **Dead-Letter Queue (DLQ)** with an `invalid time format (expected HH:MM:SS)` reason tag. We drop it from the primary analytics ingestion table to protect data integrity. *What would change this?* If the source indexer supported historical state recovery or event replays via RPC, we would trigger an asynchronous backfill query instead of permanent dropping.
 
 3. **Time Travel / Clock Skew Anomaly (`evt_008`)**
    - **Affected Rows:** `evt_008` (`block_time` = `10:10:00`, but `ingested_at` = `09:59:50`).
