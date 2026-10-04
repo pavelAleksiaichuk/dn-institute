@@ -37,3 +37,13 @@ To scale these checks and prevent data quality issues globally across the pipeli
    ```bash
    go run . sample_feed.csv
    ```
+
+## Test Execution Results
+```text
+=== RUN   TestValidateFeed_MalformedCSVAndDLQ
+--- PASS: TestValidateFeed_MalformedCSVAndDLQ (0.00s)
+=== RUN   TestValidateFeed_SampleFeedFile
+--- PASS: TestValidateFeed_SampleFeedFile (0.00s)
+PASS
+ok      trade_feed_validator    0.015s
+```
