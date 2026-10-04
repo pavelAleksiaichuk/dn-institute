@@ -6,32 +6,24 @@ import (
 )
 
 func main() {
-	filePath := "sample_feed.csv"
-	if len(os.Args) > 1 {
-		filePath = os.Args[1]
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: go run main.go <path_to_csv>")
+		os.Exit(1)
 	}
 
-	file, err := os.Open(filePath)
+	file, err := os.Open(os.Args[1])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening file %s: %v\n", filePath, err)
+		fmt.Printf("Failed to open file: %v\n", err)
 		os.Exit(1)
 	}
 	defer file.Close()
 
 	result, err := ValidateFeed(file)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Validation error: %v\n", err)
+		fmt.Printf("Validation error: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("=== Validation Results for %s ===\n", filePath)
-	fmt.Printf("Accepted Valid Events: %d\n", len(result.ValidEvents))
-	for _, e := range result.ValidEvents {
-		fmt.Printf("  [VALID] EventID: %s, TxHash: %s, Amount: %s\n", e.EventID, e.TxHash, e.Amount)
-	}
-
-	fmt.Printf("\nRejected DLQ Events: %d\n", len(result.DLQEvents))
-	for _, d := range result.DLQEvents {
-		fmt.Printf("  [DLQ] Reason: %s | EventID: %s\n", d.Reason, d.Event.EventID)
-	}
+	fmt.Printf("Successfully validated events: %d\n", len(result.ValidEvents))
+	fmt.Printf("Sent to DLQ: %d\n", len(result.DLQEvents))
 }
