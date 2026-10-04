@@ -26,13 +26,23 @@ func main() {
 	}
 
 	dlqData, err := json.MarshalIndent(result.DLQEvents, "", "  ")
-	if err == nil {
-		_ = os.WriteFile("dlq_report.json", dlqData, 0644)
+	if err != nil {
+		fmt.Printf("Failed to marshal DLQ events: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.WriteFile("dlq_report.json", dlqData, 0644); err != nil {
+		fmt.Printf("Failed to write dlq_report.json: %v\n", err)
+		os.Exit(1)
 	}
 
 	validData, err := json.MarshalIndent(result.ValidEvents, "", "  ")
-	if err == nil {
-		_ = os.WriteFile("valid_report.json", validData, 0644)
+	if err != nil {
+		fmt.Printf("Failed to marshal valid events: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.WriteFile("valid_report.json", validData, 0644); err != nil {
+		fmt.Printf("Failed to write valid_report.json: %v\n", err)
+		os.Exit(1)
 	}
 
 	fmt.Printf("Successfully validated events: %d (saved to valid_report.json)\n", len(result.ValidEvents))

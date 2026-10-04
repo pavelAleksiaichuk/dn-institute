@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -14,20 +15,20 @@ const TimeFormat = "15:04:05"
 
 type TradeEvent struct {
 	EventID          string    `json:"event_id"`
-	Symbol           string    `json:"symbol"`
-	Price            float64   `json:"price"`
-	Quantity         float64   `json:"quantity"`
-	Side             string    `json:"side"`
-	BlockTime        string    `json:"block_time"`
-	IngestTime       string    `json:"ingest_time"`
 	TxHash           string    `json:"tx_hash"`
+	BlockTime        string    `json:"block_time"`
+	Wallet           string    `json:"wallet"`
+	Side             string    `json:"side"`
+	Amount           float64   `json:"amount"`
+	IngestedAt       string    `json:"ingested_at"`
 	ParsedBlockTime  time.Time `json:"-"`
 	ParsedIngestTime time.Time `json:"-"`
 }
 
 type DLQItem struct {
-	Event  TradeEvent `json:"event"`
-	Reason string     `json:"reason"`
+	RawRecord []string    `json:"raw_record"`
+	Event     *TradeEvent `json:"event,omitempty"`
+	Reason    string      `json:"reason"`
 }
 
 type ValidationResult struct {
@@ -43,7 +44,7 @@ func ValidateFeed(r io.Reader) (*ValidationResult, error) {
 		return nil, err
 	}
 
-	expectedHeader := []string{"event_id", "symbol", "price", "quantity", "side", "block_time", "ingest_time", "tx_hash"}
+	expectedHeader := []string{"event_id", "tx_hash", "block_time", "wallet", "side", "amount", "ingested_at"}
 	if len(header) != len(expectedHeader) {
 		return nil, fmt.Errorf("invalid header length: expected %d, got %d", len(expectedHeader), len(header))
 	}
@@ -67,8 +68,8 @@ func ValidateFeed(r io.Reader) (*ValidationResult, error) {
 			}
 			if parseErr, ok := err.(*csv.ParseError); ok {
 				result.DLQEvents = append(result.DLQEvents, DLQItem{
-					Event:  TradeEvent{},
-					Reason: fmt.Sprintf("malformed csv row (line %d): %v", lineNum, parseErr),
+					RawRecord: nil,
+					Reason:    fmt.Sprintf("malformed csv row (line %d): %v", lineNum, parseErr),
 				})
 				lineNum++
 				continue
@@ -77,114 +78,112 @@ func ValidateFeed(r io.Reader) (*ValidationResult, error) {
 		}
 		lineNum++
 
-		if len(record) < 8 {
+		if len(record) < 7 {
 			result.DLQEvents = append(result.DLQEvents, DLQItem{
-				Event:  TradeEvent{},
-				Reason: "malformed row: insufficient columns",
+				RawRecord: record,
+				Reason:    "malformed row: insufficient columns",
 			})
 			continue
 		}
 
 		eventID := strings.TrimSpace(record[0])
-		symbol := strings.TrimSpace(record[1])
-		priceStr := strings.TrimSpace(record[2])
-		qtyStr := strings.TrimSpace(record[3])
+		txHash := strings.TrimSpace(record[1])
+		blockTimeStr := strings.TrimSpace(record[2])
+		wallet := strings.TrimSpace(record[3])
 		side := strings.TrimSpace(record[4])
-		blockTimeStr := strings.TrimSpace(record[5])
-		ingestTimeStr := strings.TrimSpace(record[6])
-		txHash := strings.TrimSpace(record[7])
+		amountStr := strings.TrimSpace(record[5])
+		ingestedAtStr := strings.TrimSpace(record[6])
 
-		if eventID == "" || symbol == "" || side == "" || blockTimeStr == "" || ingestTimeStr == "" || txHash == "" {
+		tempEvent := &TradeEvent{
+			EventID:    eventID,
+			TxHash:     txHash,
+			BlockTime:  blockTimeStr,
+			Wallet:     wallet,
+			Side:       side,
+			IngestedAt: ingestedAtStr,
+		}
+
+		if eventID == "" || txHash == "" || blockTimeStr == "" || wallet == "" || side == "" || ingestedAtStr == "" {
 			result.DLQEvents = append(result.DLQEvents, DLQItem{
-				Event:  TradeEvent{EventID: eventID, Symbol: symbol, Side: side, TxHash: txHash},
-				Reason: "missing mandatory field",
+				RawRecord: record,
+				Event:     tempEvent,
+				Reason:    "missing mandatory field",
 			})
 			continue
 		}
 
-		price, err := strconv.ParseFloat(priceStr, 64)
-		if err != nil || price <= 0 {
+		amount, err := strconv.ParseFloat(amountStr, 64)
+		if err != nil || amount <= 0 || math.IsNaN(amount) || math.IsInf(amount, 0) {
 			result.DLQEvents = append(result.DLQEvents, DLQItem{
-				Event:  TradeEvent{EventID: eventID, Symbol: symbol, Side: side, TxHash: txHash},
-				Reason: "invalid price format or non-positive value",
+				RawRecord: record,
+				Event:     tempEvent,
+				Reason:    "invalid amount format, non-positive value, or non-finite number",
 			})
 			continue
 		}
-
-		quantity, err := strconv.ParseFloat(qtyStr, 64)
-		if err != nil || quantity <= 0 {
-			result.DLQEvents = append(result.DLQEvents, DLQItem{
-				Event:  TradeEvent{EventID: eventID, Symbol: symbol, Side: side, TxHash: txHash},
-				Reason: "invalid quantity format or non-positive value",
-			})
-			continue
-		}
+		tempEvent.Amount = amount
 
 		upperSide := strings.ToUpper(side)
 		if upperSide != "BUY" && upperSide != "SELL" {
 			result.DLQEvents = append(result.DLQEvents, DLQItem{
-				Event:  TradeEvent{EventID: eventID, Symbol: symbol, Side: side, TxHash: txHash},
-				Reason: "invalid side value",
+				RawRecord: record,
+				Event:     tempEvent,
+				Reason:    "invalid side value",
 			})
 			continue
 		}
+		tempEvent.Side = upperSide
 
 		parsedBlockTime, err := time.Parse(TimeFormat, blockTimeStr)
 		if err != nil {
 			result.DLQEvents = append(result.DLQEvents, DLQItem{
-				Event:  TradeEvent{EventID: eventID, Symbol: symbol, Side: side, TxHash: txHash},
-				Reason: "invalid time format (expected HH:MM:SS)",
+				RawRecord: record,
+				Event:     tempEvent,
+				Reason:    "invalid time format (expected HH:MM:SS)",
 			})
 			continue
 		}
 
-		parsedIngestTime, err := time.Parse(TimeFormat, ingestTimeStr)
+		parsedIngestTime, err := time.Parse(TimeFormat, ingestedAtStr)
 		if err != nil {
 			result.DLQEvents = append(result.DLQEvents, DLQItem{
-				Event:  TradeEvent{EventID: eventID, Symbol: symbol, Side: side, TxHash: txHash},
-				Reason: "invalid time format (expected HH:MM:SS)",
+				RawRecord: record,
+				Event:     tempEvent,
+				Reason:    "invalid time format (expected HH:MM:SS)",
 			})
 			continue
 		}
 
-		event := TradeEvent{
-			EventID:          eventID,
-			Symbol:           symbol,
-			Price:            price,
-			Quantity:         quantity,
-			Side:             upperSide,
-			BlockTime:        blockTimeStr,
-			IngestTime:       ingestTimeStr,
-			TxHash:           txHash,
-			ParsedBlockTime:  parsedBlockTime,
-			ParsedIngestTime: parsedIngestTime,
-		}
+		tempEvent.ParsedBlockTime = parsedBlockTime
+		tempEvent.ParsedIngestTime = parsedIngestTime
 
 		if parsedIngestTime.Before(parsedBlockTime) {
 			result.DLQEvents = append(result.DLQEvents, DLQItem{
-				Event:  event,
-				Reason: "clock skew detected: ingested_at is before block_time",
+				RawRecord: record,
+				Event:     tempEvent,
+				Reason:    "clock skew detected: ingested_at is before block_time",
 			})
 			continue
 		}
 
-		canonicalHash := event.TxHash
-		if decoded, err := hex.DecodeString(event.TxHash); err == nil {
+		canonicalHash := txHash
+		if decoded, err := hex.DecodeString(txHash); err == nil {
 			canonicalHash = hex.EncodeToString(decoded)
 		} else {
-			canonicalHash = strings.ToLower(event.TxHash)
+			canonicalHash = strings.ToLower(txHash)
 		}
 
 		if prevEventID, exists := seenTxHash[canonicalHash]; exists {
 			result.DLQEvents = append(result.DLQEvents, DLQItem{
-				Event:  event,
-				Reason: fmt.Sprintf("duplicate transaction hash (already seen in event %s)", prevEventID),
+				RawRecord: record,
+				Event:     tempEvent,
+				Reason:    fmt.Sprintf("duplicate transaction hash (already seen in event %s)", prevEventID),
 			})
 			continue
 		}
 
-		seenTxHash[canonicalHash] = event.EventID
-		result.ValidEvents = append(result.ValidEvents, event)
+		seenTxHash[canonicalHash] = eventID
+		result.ValidEvents = append(result.ValidEvents, *tempEvent)
 	}
 
 	return result, nil
