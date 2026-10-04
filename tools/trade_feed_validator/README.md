@@ -18,11 +18,11 @@ A lightweight, robust Go-based validator designed to inspect trade event feeds f
    - **Affected Rows:** `evt_008` (`block_time` = `10:10:00`, but `ingested_at` = `09:59:50`).
    - **Downstream Impact:** Violates causal integrity. Ingested time cannot precede block time; this breaks time-series sliding windows and real-time streaming aggregations.
 
-## General Practices to Catch This Automatically
-To catch this entire class of problems automatically before analysts find them downstream, we implement:
-1. **Schema Validation Gateways & Contracts:** Enforce strict JSON Schema / Protobuf definitions at the ingestion API boundary to instantly reject `null` or malformed fields.
-2. **Stateful Deduplication Windows:** Utilize Redis-backed sliding bloom filters or unique index constraints on `tx_hash` within a short TTL window to drop duplicate events at the ingress layer.
-3. **Anomaly Alerts & Metric Probes:** Setup automated Prometheus alerts for DLQ spike rates and clock-skew discrepancies.
+## Recommended Production Safeguards
+To scale these checks and prevent data quality issues globally across the pipeline in a production environment, future iterations could integrate:
+1. **Schema Validation Gateways:** Enforce strict contract definitions (Protobuf/JSON Schema) at the ingestion API boundary.
+2. **Distributed Deduplication:** Scale beyond in-memory state by utilizing Redis-backed sliding windows or database unique index constraints on `tx_hash` for cross-instance deduplication.
+3. **Observability & Alerting:** Hook the DLQ outputs into monitoring systems (e.g., Prometheus/Grafana) to trigger automated alerts on high anomaly spikes or clock-skew rates.
 
 ## How to Run
 1. Navigate to the tool directory:
@@ -35,5 +35,5 @@ To catch this entire class of problems automatically before analysts find them d
    ```
 3. Run the validator:
    ```bash
-   go run validator.go
+   go run main.go sample_feed.csv
    ```

@@ -1,4 +1,4 @@
-package trade_feed_validator
+package main
 
 import (
 	"strings"
