@@ -7,25 +7,54 @@ import (
 
 func TestValidateFeed(t *testing.T) {
 	csvData := `event_id,tx_hash,block_time,wallet,side,amount,ingested_at
-evt_001,0xaa1,09:14:02,0xD4...,BUY,120000,09:14:05
-evt_002,0xaa2,09:41:20,0xD4...,BUY,120000,09:41:23
-evt_003,0xaa2,09:41:20,0xD4...,BUY,120000,09:44:01
-evt_004,0xaa3,09:52:10,0xE5...,SELL,45000,09:52:14
-evt_005,0xaa4,,0xE5...,SELL,30000,09:58:30
-evt_006,0xaa5,10:03:11,0xF6...,BUY,90000,10:03:15
-evt_007,0xaa5,10:03:11,0xF6...,BUY,90000,10:03:15
-evt_008,0xaa6,10:10:00,0xF6...,SELL,90000,09:59:50`
+evt_001,0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef,10:00:00,0xWalletA,BUY,1.5,10:00:05
+evt_002,0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab,10:01:00,0xWalletB,SELL,10.0,10:01:02
+evt_003,0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef,10:02:00,0xWalletC,BUY,0.5,10:02:01
+evt_005,,10:03:00,0xWalletE,BUY,1.0,10:03:05
+evt_007,0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef,10:04:00,0xWalletG,BUY,2.0,10:04:01
+evt_008,0x3333333333333333333333333333333333333333333333333333333333333333,10:05:05,0xWalletH,BUY,1.0,10:05:00
+`
 
-	res, err := ValidateFeed(strings.NewReader(csvData))
+	result, err := ValidateFeed(strings.NewReader(csvData))
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("unexpected validation error: %v", err)
 	}
 
-	if len(res.ValidEvents) != 4 {
-		t.Errorf("expected 4 valid events, got %d", len(res.ValidEvents))
+	if len(result.ValidEvents) != 2 {
+		t.Errorf("expected 2 valid events, got %d", len(result.ValidEvents))
 	}
 
-	if len(res.DLQEvents) != 4 {
-		t.Errorf("expected 4 DLQ events, got %d", len(res.DLQEvents))
+	expectedValidIDs := map[string]bool{"evt_001": true, "evt_002": true}
+	for _, ev := range result.ValidEvents {
+		if !expectedValidIDs[ev.EventID] {
+			t.Errorf("unexpected valid event ID: %s", ev.EventID)
+		}
+	}
+
+	expectedDLQReasons := map[string]string{
+		"evt_003": "duplicate transaction hash",
+		"evt_005": "missing mandatory field",
+		"evt_007": "duplicate transaction hash",
+		"evt_008": "clock skew detected",
+	}
+
+	if len(result.DLQEvents) != len(expectedDLQReasons) {
+		t.Errorf("expected %d DLQ events, got %d", len(expectedDLQReasons), len(result.DLQEvents))
+	}
+
+	for _, item := range result.DLQEvents {
+		if item.Event == nil {
+			t.Errorf("DLQ item missing event context")
+			continue
+		}
+		eventID := item.Event.EventID
+		prefix, exists := expectedDLQReasons[eventID]
+		if !exists {
+			t.Errorf("unexpected DLQ event ID: %s", eventID)
+			continue
+		}
+		if !strings.Contains(item.Reason, prefix) {
+			t.Errorf("for event %s expected reason containing '%s', got '%s'", eventID, prefix, item.Reason)
+		}
 	}
 }
